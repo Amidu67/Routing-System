@@ -272,7 +272,7 @@
   <div class="sentence-box">
     <p>Explore Devtraco with live GPS navigation, voice-guided directions, and seamless search functionality.</p>
   </div>
-  <button onclick="show('map')">Start Navigation</button>
+  <button id="startNavigationBtn" onclick="show('map')">Start Navigation</button>
 </div>
 
 <div id="about" class="page">
@@ -338,6 +338,21 @@
   // Speak function with queue management
   let speechQueue = [];
   let isSpeaking = false;
+  let speechInitialized = false;
+
+  function initializeSpeech() {
+    if (speechInitialized) return;
+    
+    // Mobile devices need a user gesture to initialize audio
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    oscillator.connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.001);
+    
+    speechInitialized = true;
+    speak("Welcome to Devtraco Estate Navigation System");
+  }
 
   function speak(text) {
     if (!window.speechSynthesis) {
@@ -345,29 +360,7 @@
       return;
     }
     
-    // Chrome requires user interaction first
-    if (window.speechSynthesis.pending || window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-    
-    // Add to queue
-    speechQueue.push(text);
-    
-    // If not currently speaking, start processing queue
-    if (!isSpeaking) {
-      processSpeechQueue();
-    }
-  }
-
-  function processSpeechQueue() {
-    if (speechQueue.length === 0) {
-      isSpeaking = false;
-      return;
-    }
-    
-    isSpeaking = true;
-    const text = speechQueue.shift();
-    
+    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
     
     const utter = new SpeechSynthesisUtterance(text);
@@ -380,22 +373,17 @@
       utter.volume = 1.5;
     }
     
-    utter.onend = function() {
-      setTimeout(processSpeechQueue, 500); // Small delay between messages
-    };
-    
     window.speechSynthesis.speak(utter);
   }
 
-  // Play welcome message when page loads
-  window.addEventListener('DOMContentLoaded', () => {
-    // Chrome requires user interaction first
+  // Initialize speech when user first interacts
+  document.addEventListener('DOMContentLoaded', function() {
+    // Set up click handlers to initialize speech
+    document.getElementById('startNavigationBtn').addEventListener('click', initializeSpeech);
     document.addEventListener('click', function firstInteraction() {
-      setTimeout(() => {
-        speak("Welcome to Devtraco Estate Navigation System");
-      }, 1000);
+      initializeSpeech();
       document.removeEventListener('click', firstInteraction);
-    });
+    }, { once: true });
   });
 
   function show(id) {
@@ -433,91 +421,57 @@
     L.control.layers(baseLayers).addTo(map);
 
     // Load estate GeoJSON (houses) from Building_point.json
-    fetch('Building_point.json')
-      .then(response => {
-        if (!response.ok) throw new Error('Failed to load house GeoJSON');
-        return response.json();
-      })
-      .then(data => {
-        houseData = data.features;
-        console.log(`Loaded ${houseData.length} buildings from Building_point.json`);
-      })
-      .catch(error => {
-        console.error('Error loading house data:', error);
-        // Fallback to the sample data from your Building_point.json
-        const sampleHouseData = {
-          "type":"FeatureCollection",
-          "features":[{
-            "type":"Feature",
-            "id":54,
-            "geometry":{
-              "type":"Point",
-              "coordinates":[0.046657388234413413,5.7315854133107598]
-            },
-            "properties":{
-              "FID":54,
-              "TARGET_FID":1146,
-              "OBJECTID_1":1140,
-              "Northings":385586.78672799998,
-              "Eastings":1280192.4411299999,
-              "CreationDa":1752624000000,
-              "Creator":"sfiatuga",
-              "EditDate":1754092800000,
-              "Editor":"sfiatuga",
-              "HOUSE_NUMB":"SS14",
-              "ORIG_FID":55,
-              "Image_URL":"https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMNYAE53rdANIf0M0s82pbE9L8S6-c6s_fVQ&s"
-            }
-          }]
-        };
-        houseData = sampleHouseData.features;
-        console.log('Using fallback building data with 1 house');
-      });
+    houseData = [{
+      "type":"Feature",
+      "id":54,
+      "geometry":{
+        "type":"Point",
+        "coordinates":[0.046657388234413413,5.7315854133107598]
+      },
+      "properties":{
+        "FID":54,
+        "TARGET_FID":1146,
+        "OBJECTID_1":1140,
+        "Northings":385586.78672799998,
+        "Eastings":1280192.4411299999,
+        "CreationDa":1752624000000,
+        "Creator":"sfiatuga",
+        "EditDate":1754092800000,
+        "Editor":"sfiatuga",
+        "HOUSE_NUMB":"SS14",
+        "ORIG_FID":55,
+        "Image_URL":"https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMNYAE53rdANIf0M0s82pbE9L8S6-c6s_fVQ&s"
+      }
+    }];
 
-    // Load road GeoJSON and cache for performance
-    fetch('ROAD.json')
-      .then(response => {
-        if (!response.ok) throw new Error('Failed to load road GeoJSON');
-        return response.json();
-      })
-      .then(data => {
-        roadData = data.features;
-      })
-      .catch(error => {
-        console.error('Error loading road data:', error);
-        const sampleRoadData = {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: { name: "Main Estate Road", type: "road", ROAD_ID: "R1" },
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0.0445, 5.7328],
-                  [0.0447, 5.7328],
-                  [0.0449, 5.7327]
-                ]
-              }
-            },
-            {
-              type: "Feature",
-              properties: { name: "Secondary Road", type: "road", ROAD_ID: "R2" },
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0.0446, 5.7329],
-                  [0.0448, 5.7329],
-                  [0.0450, 5.7330]
-                ]
-              }
-            }
+    // Sample road data
+    roadData = [
+      {
+        type: "Feature",
+        properties: { name: "Main Estate Road", type: "road", ROAD_ID: "R1" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [0.0445, 5.7328],
+            [0.0447, 5.7328],
+            [0.0449, 5.7327]
           ]
-        };
-        roadData = sampleRoadData.features;
-      });
+        }
+      },
+      {
+        type: "Feature",
+        properties: { name: "Secondary Road", type: "road", ROAD_ID: "R2" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [0.0446, 5.7329],
+            [0.0448, 5.7329],
+            [0.0450, 5.7330]
+          ]
+        }
+      }
+    ];
 
-    // Initialize routing control with enhanced styling
     routingControl = L.Routing.control({
       waypoints: [],
       routeWhileDragging: false,
@@ -545,34 +499,45 @@
       }
     }).addTo(map);
 
-    // Add loading indicator and error handling for routing
     routingControl.on('routestart', function() {
       document.getElementById('loadingSpinner').style.display = 'block';
     });
 
     routingControl.on('routesfound', function(e) {
       document.getElementById('loadingSpinner').style.display = 'none';
-      currentRoute = e.routes[0];
+      const routes = e.routes;
+      instructions = routes[0].instructions;
+      nextInstructionIndex = 0;
+      isNavigating = true;
+      
+      if (periodicUpdateInterval) {
+        clearInterval(periodicUpdateInterval);
+      }
+      
+      periodicUpdateInterval = setInterval(() => {
+        if (isNavigating) {
+          const distanceToDestination = map.distance(userPos, instructions[instructions.length - 1].latLng);
+          const distanceText = distanceToDestination < 1000 ? 
+            `${Math.round(distanceToDestination)} meters` : 
+            `${(distanceToDestination / 1000).toFixed(1)} kilometers`;
+          speak(`Navigation update: You are ${distanceText} from your destination`);
+        }
+      }, 180000);
+      
+      if (instructions.length > 0) {
+        speakInstruction(instructions[0]);
+        nextInstructionIndex = 1;
+      }
+      
+      const distance = (routes[0].summary.totalDistance / 1000).toFixed(1);
+      speak(`Route calculated. Your destination is ${distance} kilometers away.`);
     });
 
     routingControl.on('routingerror', function(e) {
       document.getElementById('loadingSpinner').style.display = 'none';
       speak("Unable to calculate route. Please try a different location or check your connection.");
-      alert("Routing error: Unable to find a route. Please try again or check road data.");
     });
 
-    // Pre-warm routing engine
-    setTimeout(() => {
-      const dummyStart = [5.7328, 0.0447];
-      const dummyEnd = [5.7330, 0.0449];
-      routingControl.setWaypoints([
-        L.latLng(dummyStart[0], dummyStart[1]),
-        L.latLng(dummyEnd[0], dummyEnd[1])
-      ]);
-      setTimeout(() => routingControl.setWaypoints([]), 100);
-    }, 500);
-
-    // High-precision geolocation
     const geoOptions = {
       enableHighAccuracy: true,
       timeout: 10000,
@@ -597,41 +562,6 @@
       geoOptions
     );
 
-    routingControl.on('routesfound', function(e) {
-      const routes = e.routes;
-      instructions = routes[0].instructions;
-      nextInstructionIndex = 0;
-      isNavigating = true;
-      
-      // Clear any existing periodic updates
-      if (periodicUpdateInterval) {
-        clearInterval(periodicUpdateInterval);
-      }
-      
-      // Start periodic updates every 3 minutes
-      periodicUpdateInterval = setInterval(() => {
-        if (isNavigating) {
-          speakPeriodicUpdate();
-        }
-      }, 180000); // 3 minutes = 180000 milliseconds
-      
-      if (instructions.length > 0) {
-        speakInstruction(instructions[0]);
-        nextInstructionIndex = 1;
-      }
-      
-      const distance = (routes[0].summary.totalDistance / 1000).toFixed(1);
-      speak(`Route calculated. Your destination is ${distance} kilometers away.`);
-    });
-
-    routingControl.on('routeselected', function(e) {
-      const route = e.route;
-      instructions = route.instructions;
-      nextInstructionIndex = 0;
-      isNavigating = true;
-    });
-
-    // Search input event listeners
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('search-results');
     
@@ -675,53 +605,6 @@
     });
   }
 
-  function speakPeriodicUpdate() {
-    if (!isNavigating || !instructions || instructions.length === 0) return;
-    
-    // Find the current instruction
-    let currentInstruction = null;
-    let nextInstruction = null;
-    
-    for (let i = 0; i < instructions.length; i++) {
-      const instruction = instructions[i];
-      const distanceToInstruction = map.distance(userPos, instruction.latLng);
-      
-      if (distanceToInstruction < 100) {
-        currentInstruction = instruction;
-        if (i < instructions.length - 1) {
-          nextInstruction = instructions[i + 1];
-        }
-        break;
-      }
-    }
-    
-    let updateMessage = "Periodic navigation update: ";
-    
-    if (currentInstruction) {
-      updateMessage += `You recently ${currentInstruction.text.toLowerCase()}. `;
-      
-      if (nextInstruction) {
-        const distance = nextInstruction.distance < 1000 ? 
-          `${Math.round(nextInstruction.distance)} meters` : 
-          `${(nextInstruction.distance / 1000).toFixed(1)} kilometers`;
-        updateMessage += `In ${distance}, ${nextInstruction.text}.`;
-      } else {
-        updateMessage += "You are approaching your destination.";
-      }
-    } else {
-      // If no current instruction found, give general update
-      const distanceToDestination = map.distance(userPos, instructions[instructions.length - 1].latLng);
-      const distanceText = distanceToDestination < 1000 ? 
-        `${Math.round(distanceToDestination)} meters` : 
-        `${(distanceToDestination / 1000).toFixed(1)} kilometers`;
-      
-      updateMessage += `You are ${distanceText} from your destination. `;
-      updateMessage += `Next instruction: ${instructions[0].text}`;
-    }
-    
-    speak(updateMessage);
-  }
-
   function isInEstate(lat, lon) {
     return lat >= estateBounds.minLat && lat <= estateBounds.maxLat &&
            lon >= estateBounds.minLon && lon <= estateBounds.maxLon;
@@ -731,7 +614,7 @@
     let minDistance = Infinity;
     let nearestPoint = null;
     let nearestRoadName = '';
-    const maxSnapDistance = 50; // Max snapping distance in meters
+    const maxSnapDistance = 50;
 
     roadData.forEach(road => {
       if (road.geometry.type === 'LineString') {
@@ -739,7 +622,7 @@
           const distance = map.distance([lat, lon], [coord[1], coord[0]]);
           if (distance < minDistance && distance <= maxSnapDistance) {
             minDistance = distance;
-            nearestPoint = [coord[1], coord[0]]; // [lat, lon]
+            nearestPoint = [coord[1], coord[0]];
             nearestRoadName = road.properties.name || road.properties.ROAD_ID || 'road';
           }
         });
@@ -749,33 +632,9 @@
     return { point: nearestPoint, roadName: nearestRoadName, distance: minDistance };
   }
 
-  function getRoadWaypoints(startLatLng, endLatLng) {
-    const waypoints = [];
-    
-    // Snap start point to road if in estate
-    if (isInEstate(startLatLng[0], startLatLng[1])) {
-      const nearestStart = findNearestRoadPoint(startLatLng[0], startLatLng[1]);
-      if (nearestStart.point && nearestStart.distance <= 50) {
-        waypoints.push(L.latLng(nearestStart.point[0], nearestStart.point[1]));
-        speak(`Starting from ${nearestStart.roadName}`);
-      } else {
-        waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-        speak("Starting from your current location, no nearby road found.");
-      }
-    } else {
-      waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-    }
-
-    // Route directly to destination (no snapping for destination)
-    waypoints.push(L.latLng(endLatLng[0], endLatLng[1]));
-
-    return waypoints;
-  }
-
   function updateUserPosition(position) {
     const lat = position.coords.latitude;
     const lon = position.coords.longitude;
-    // Limit accuracy circle to maximum 20 meters radius for visual clarity
     const accuracy = Math.min(position.coords.accuracy, 20); 
     
     userPos = [lat, lon];
@@ -912,7 +771,6 @@
       return;
     }
     
-    // First try to find matching house in estate
     const houseMatch = houseData.find(house => 
       house.properties.HOUSE_NUMB && 
       house.properties.HOUSE_NUMB.toUpperCase() === q.toUpperCase()
@@ -923,7 +781,6 @@
       return;
     }
     
-    // If not a house number, search external locations
     fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q + ' Ghana')}`)
       .then(res => res.json())
       .then(data => {
@@ -934,13 +791,14 @@
         const dest = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
         
         if (isInEstate(dest[0], dest[1])) {
-          // If destination is in estate but not a house number, use road snapping
-          const waypoints = getRoadWaypoints(userPos, dest);
+          const waypoints = [
+            L.latLng(userPos[0], userPos[1]),
+            L.latLng(dest[0], dest[1])
+          ];
           routingControl.setWaypoints(waypoints);
           map.setView(dest, 15);
           speak(`Routing to ${q} via estate roads`);
         } else {
-          // External location - route directly
           routingControl.setWaypoints([
             L.latLng(userPos[0], userPos[1]), 
             L.latLng(dest[0], dest[1])
@@ -952,7 +810,6 @@
       .catch(err => {
         console.error('Search error:', err);
         speak("Error searching for location. Please try again.");
-        alert('Error searching for location');
       });
   }
 
@@ -974,7 +831,6 @@
       shadowSize: [41, 41]
     });
     
-    // Create popup content with image if available
     let popupContent = `<b>House:</b> ${house.properties.HOUSE_NUMB}`;
     if (house.properties.Image_URL) {
       popupContent += `<br><img src="${house.properties.Image_URL}" style="max-width:250px; max-height:250px; margin-top:10px;">`;
@@ -990,7 +846,6 @@
         map.removeControl(routingControl);
       }
 
-      // Route directly to the building point
       routingControl = L.Routing.control({
         waypoints: [
           L.latLng(userPos[0], userPos[1]),
@@ -1013,7 +868,6 @@
       speak(`Routing to house ${house.properties.HOUSE_NUMB}`);
     } else {
       speak("Please enable location services to get directions.");
-      alert("Please enable location services to get directions.");
     }
   }
 
