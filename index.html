@@ -336,6 +336,7 @@
   let currentRoute = null;
   let voiceEnabled = true;
   let audioContextInitialized = false;
+  let lastPosition = null;
 
   const estateBounds = {
     minLat: 5.7260,
@@ -353,6 +354,7 @@
         new webkitAudioContext();
       }
       audioContextInitialized = true;
+      console.log("AudioContext initialized successfully");
     } catch (e) {
       console.warn("AudioContext initialization failed:", e);
     }
@@ -364,44 +366,45 @@
       console.warn("Speech synthesis not supported");
       return;
     }
-    
     try {
       initAudioContext();
       window.speechSynthesis.cancel();
-      
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'en-US';
-      
-      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (isIOS) {
-        utter.rate = 0.9;
-        utter.volume = 1.0;
-        utter.pitch = 1.0;
-      } else if (/Android/i.test(navigator.userAgent)) {
-        utter.rate = 1.0;
-        utter.volume = 1.5;
-      } else {
-        utter.rate = 0.9;
-        utter.volume = 1.0;
-      }
-      
-      const voices = window.speechSynthesis.getVoices();
-      console.log("Available voices:", voices.map(v => ({ name: v.name, lang: v.lang })));
-      let selectedVoice = voices.find(v => v.name.includes('Siri') || v.name.includes('Female') || v.name.includes('woman'));
-      if (!selectedVoice) {
-        selectedVoice = voices.find(v => v.lang === 'en-US') || voices[0];
-      }
-      if (selectedVoice) {
-        utter.voice = selectedVoice;
-        console.log("Selected voice:", selectedVoice.name);
-      }
-      
-      utter.onerror = function(event) {
-        console.error("SpeechSynthesis error:", event);
+      const speakUtterance = () => {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = 'en-US';
+        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (isIOS) {
+          utter.rate = 0.9;
+          utter.volume = 1.0;
+          utter.pitch = 1.0;
+        } else if (/Android/i.test(navigator.userAgent)) {
+          utter.rate = 1.0;
+          utter.volume = 1.5;
+        } else {
+          utter.rate = 0.9;
+          utter.volume = 1.0;
+        }
+        const voices = window.speechSynthesis.getVoices();
+        console.log("Available voices:", voices.map(v => ({ name: v.name, lang: v.lang })));
+        let selectedVoice = voices.find(v => v.name.includes('Siri') || v.name.includes('Female') || v.name.includes('woman'));
+        if (!selectedVoice) {
+          selectedVoice = voices.find(v => v.lang === 'en-US') || voices[0];
+        }
+        if (selectedVoice) {
+          utter.voice = selectedVoice;
+          console.log("Selected voice:", selectedVoice.name);
+        }
+        utter.onerror = function(event) {
+          console.error("SpeechSynthesis error:", event);
+        };
+        window.speechSynthesis.speak(utter);
+        lastSpokenInstruction = text;
       };
-      
-      window.speechSynthesis.speak(utter);
-      lastSpokenInstruction = text;
+      if (window.speechSynthesis.getVoices().length === 0) {
+        window.speechSynthesis.onvoiceschanged = speakUtterance;
+      } else {
+        speakUtterance();
+      }
     } catch (e) {
       console.error("Error in speak function:", e);
     }
@@ -409,49 +412,39 @@
 
   function toggleVoice() {
     voiceEnabled = !voiceEnabled;
+    console.log("Voice enabled:", voiceEnabled);
     document.getElementById('voiceToggleBtn').textContent = voiceEnabled ? '🔊' : '🔇';
     if (voiceEnabled && lastSpokenInstruction) {
       speak(lastSpokenInstruction);
     }
   }
 
-  // Improved speech synthesis for iOS & Android
-  function speakInstruction(instruction) {
-    if (!voiceEnabled) return;
-    if (!window.speechSynthesis) {
-      console.warn("Speech synthesis not supported");
-      return;
+  function startPeriodicVoiceUpdates() {
+    if (periodicUpdateInterval) {
+      clearInterval(periodicUpdateInterval);
     }
-    
-    try {
-      const utterance = new SpeechSynthesisUtterance(instruction.text);
-      utterance.lang = 'en-US';
-      utterance.rate = 0.9; // Clearer pace for mobile
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-
-      // iOS voices need to be explicitly set if available
-      const voices = speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        const preferredVoice = voices.find(v => v.lang === 'en-US' && v.name.includes('Samantha')) 
-                             || voices.find(v => v.lang === 'en-US');
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
-          console.log("Selected voice for instruction:", preferredVoice.name);
+    lastPosition = userPos.length ? [...userPos] : null;
+    periodicUpdateInterval = setInterval(() => {
+      if (isNavigating && instructions.length > 0 && voiceEnabled && userPos.length && lastPosition) {
+        const distanceMoved = map.distance(userPos, lastPosition);
+        if (distanceMoved > 10) {
+          const currentInstruction = instructions[nextInstructionIndex];
+          if (currentInstruction) {
+            speak(`Next instruction: ${currentInstruction.text}.`);
+          } else if (nextInstructionIndex >= instructions.length - 1) {
+            const distanceToDest = map.distance(userPos, instructions[instructions.length - 1].latLng);
+            if (distanceToDest < 20) {
+              speak(`You have arrived at your destination.`);
+              clearInterval(periodicUpdateInterval);
+              periodicUpdateInterval = null;
+            } else {
+              speak(`Continue towards your destination.`);
+            }
+          }
         }
+        lastPosition = userPos.length ? [...userPos] : null;
       }
-
-      utterance.onerror = function(event) {
-        console.error("SpeechSynthesis error:", event);
-      };
-
-      // Speak immediately
-      speechSynthesis.cancel(); // stop any ongoing speech
-      speechSynthesis.speak(utterance);
-      lastSpokenInstruction = instruction.text;
-    } catch (e) {
-      console.error("Error in speakInstruction:", e);
-    }
+    }, 300000); // 5 minutes
   }
 
   document.addEventListener('DOMContentLoaded', function() {
@@ -497,6 +490,11 @@
             console.error("Error initializing map:", e);
           }
         }, 300);
+      } else {
+        if (periodicUpdateInterval) {
+          clearInterval(periodicUpdateInterval);
+          periodicUpdateInterval = null;
+        }
       }
     } catch (e) {
       console.error("Error in show function:", e);
@@ -632,18 +630,10 @@
           nextInstructionIndex = 0;
           isNavigating = true;
           
-          if (instructions.length > 0 && voiceEnabled) {
-            instructions.forEach((step, i) => {
-              setTimeout(() => {
-                if (voiceEnabled && isNavigating) {
-                  speakInstruction(step);
-                }
-              }, i * 6000); // Delay between each step
-            });
-          }
-          
           const distance = (e.routes[0].summary.totalDistance / 1000).toFixed(1);
           if (voiceEnabled) speak(`Route calculated. Your destination is ${distance} kilometers away.`);
+          
+          startPeriodicVoiceUpdates();
         } catch (e) {
           console.error("Error in routesfound:", e);
         }
@@ -652,6 +642,10 @@
       routingControl.on('routingerror', function(e) {
         document.getElementById('loadingSpinner').style.display = 'none';
         if (voiceEnabled) speak("Unable to calculate route. Please try a different location.");
+        if (periodicUpdateInterval) {
+          clearInterval(periodicUpdateInterval);
+          periodicUpdateInterval = null;
+        }
       });
 
       const geoOptions = {
@@ -769,9 +763,10 @@
 
       const currentInstruction = instructions[nextInstructionIndex];
       const distanceToNext = map.distance(userPos, currentInstruction.latLng);
+      const distanceMoved = userPos.length && lastPosition ? map.distance(userPos, lastPosition) : 0;
 
-      if (distanceToNext < 50) {
-        if (voiceEnabled) speakInstruction(currentInstruction);
+      if (distanceMoved > 10 && distanceToNext < 50) {
+        if (voiceEnabled) speak(currentInstruction.text);
         nextInstructionIndex++;
         
         if (nextInstructionIndex < instructions.length && distanceToNext < 150) {
@@ -779,7 +774,7 @@
           if (voiceEnabled) speak(`After that, ${nextInstruction.text}`);
         }
       } else if (nextInstructionIndex === instructions.length - 1 && distanceToNext < 20) {
-        if (voiceEnabled) speak("You have arrived at your destination");
+        if (voiceEnabled) speak(`You have arrived at your destination`);
         isNavigating = false;
         if (periodicUpdateInterval) {
           clearInterval(periodicUpdateInterval);
@@ -809,6 +804,7 @@
           break;
       }
       console.error(errorMsg);
+      if (voiceEnabled) speak(errorMsg);
       
       userPos = [5.7328, 0.0447];
       if (userMarker) {
