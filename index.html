@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <meta http-equiv="x-ua-compatible" content="IE=edge">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Devtraco Estate Navigation</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
@@ -257,6 +259,19 @@
       border-radius: 4px;
       border: 1px solid #ddd;
     }
+
+    /* Mobile-specific styles */
+    @media (max-width: 768px) {
+      .search-bar {
+        width: 90%;
+      }
+      .search-bar input {
+        width: 100%;
+      }
+      #home h1 {
+        font-size: 2em;
+      }
+    }
   </style>
 </head>
 <body>
@@ -272,7 +287,7 @@
   <div class="sentence-box">
     <p>Explore Devtraco with live GPS navigation, voice-guided directions, and seamless search functionality.</p>
   </div>
-  <button onclick="show('map')">Start Navigation</button>
+  <button id="startNavBtn">Start Navigation with Voice</button>
 </div>
 
 <div id="about" class="page">
@@ -308,6 +323,7 @@
   <div id="loadingSpinner" class="loading-spinner" style="display: none;"></div>
   <div class="voice-controls">
     <button class="voice-btn" onclick="repeatInstruction()" title="Repeat instruction">🔊</button>
+    <button class="voice-btn" onclick="toggleVoice()" title="Toggle voice guidance" id="voiceToggleBtn">🔇</button>
   </div>
   <button class="recenter-btn" onclick="recenterMap()" title="Recenter on my location">📍</button>
 </div>
@@ -326,6 +342,8 @@
   let highlightedHouse = null;
   let periodicUpdateInterval = null;
   let currentRoute = null;
+  let voiceEnabled = true;
+  let audioContextInitialized = false;
 
   // Updated Devtraco Estate bounding box based on Building_point.json
   const estateBounds = {
@@ -335,67 +353,90 @@
     maxLon: 0.0500
   };
 
-  // Speak function with queue management
-  let speechQueue = [];
-  let isSpeaking = false;
+  // Initialize audio context on first user interaction
+  function initAudioContext() {
+    if (audioContextInitialized) return;
+    try {
+      if (typeof AudioContext !== 'undefined') {
+        new AudioContext();
+      } else if (typeof webkitAudioContext !== 'undefined') {
+        new webkitAudioContext();
+      }
+      audioContextInitialized = true;
+    } catch (e) {
+      console.warn("AudioContext initialization failed:", e);
+    }
+  }
 
+  // Speak function with mobile support
   function speak(text) {
+    if (!voiceEnabled) return;
     if (!window.speechSynthesis) {
       console.warn("Speech synthesis not supported");
       return;
     }
     
-    // Chrome requires user interaction first
-    if (window.speechSynthesis.pending || window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
+    // Initialize audio context on first speak
+    initAudioContext();
     
-    // Add to queue
-    speechQueue.push(text);
-    
-    // If not currently speaking, start processing queue
-    if (!isSpeaking) {
-      processSpeechQueue();
-    }
-  }
-
-  function processSpeechQueue() {
-    if (speechQueue.length === 0) {
-      isSpeaking = false;
-      return;
-    }
-    
-    isSpeaking = true;
-    const text = speechQueue.shift();
-    
+    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
     
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'en-US';
-    utter.rate = 0.9;
-    utter.pitch = 1.1;
     
+    // Adjust settings based on device
     if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-      utter.rate = 1.0;
-      utter.volume = 1.5;
+      utter.rate = 1.0;  // Slightly slower for mobile clarity
+      utter.volume = 1.5; // Louder for mobile devices
+    } else {
+      utter.rate = 0.9;
+      utter.volume = 1.0;
     }
     
-    utter.onend = function() {
-      setTimeout(processSpeechQueue, 500); // Small delay between messages
+    // Try to select a voice (some mobile devices have limited voices)
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      // Prefer female voices if available (often clearer)
+      const femaleVoice = voices.find(v => v.name.includes('Female') || v.name.includes('woman'));
+      if (femaleVoice) {
+        utter.voice = femaleVoice;
+      } else {
+        utter.voice = voices[0];
+      }
+    }
+    
+    utter.onerror = function(event) {
+      console.error("SpeechSynthesis error:", event);
     };
     
     window.speechSynthesis.speak(utter);
+    lastSpokenInstruction = text;
   }
 
-  // Play welcome message when page loads
-  window.addEventListener('DOMContentLoaded', () => {
-    // Chrome requires user interaction first
-    document.addEventListener('click', function firstInteraction() {
-      setTimeout(() => {
-        speak("Welcome to Devtraco Estate Navigation System");
-      }, 1000);
-      document.removeEventListener('click', firstInteraction);
+  function toggleVoice() {
+    voiceEnabled = !voiceEnabled;
+    document.getElementById('voiceToggleBtn').textContent = voiceEnabled ? '🔊' : '🔇';
+    if (voiceEnabled && lastSpokenInstruction) {
+      speak(lastSpokenInstruction);
+    }
+  }
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    // Set up the start navigation button
+    document.getElementById('startNavBtn').addEventListener('click', function() {
+      initAudioContext();
+      speak("Welcome to Devtraco Estate Navigation System");
+      show('map');
     });
+    
+    // Initialize speech synthesis voices when they become available
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = function() {
+        console.log("Voices loaded:", window.speechSynthesis.getVoices());
+      };
+    }
   });
 
   function show(id) {
@@ -432,7 +473,7 @@
     streetLayer.addTo(map);
     L.control.layers(baseLayers).addTo(map);
 
-    // Load estate GeoJSON (houses) from Building_point.json
+    // Load estate GeoJSON (houses)
     fetch('Building_point.json')
       .then(response => {
         if (!response.ok) throw new Error('Failed to load house GeoJSON');
@@ -440,41 +481,36 @@
       })
       .then(data => {
         houseData = data.features;
-        console.log(`Loaded ${houseData.length} buildings from Building_point.json`);
+        console.log(`Loaded ${houseData.length} buildings`);
       })
       .catch(error => {
         console.error('Error loading house data:', error);
-        // Fallback to the sample data from your Building_point.json
-        const sampleHouseData = {
-          "type":"FeatureCollection",
-          "features":[{
-            "type":"Feature",
-            "id":54,
-            "geometry":{
-              "type":"Point",
-              "coordinates":[0.046657388234413413,5.7315854133107598]
-            },
-            "properties":{
-              "FID":54,
-              "TARGET_FID":1146,
-              "OBJECTID_1":1140,
-              "Northings":385586.78672799998,
-              "Eastings":1280192.4411299999,
-              "CreationDa":1752624000000,
-              "Creator":"sfiatuga",
-              "EditDate":1754092800000,
-              "Editor":"sfiatuga",
-              "HOUSE_NUMB":"SS14",
-              "ORIG_FID":55,
-              "Image_URL":"https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMNYAE53rdANIf0M0s82pbE9L8S6-c6s_fVQ&s"
-            }
-          }]
-        };
-        houseData = sampleHouseData.features;
-        console.log('Using fallback building data with 1 house');
+        // Fallback sample data
+        houseData = [{
+          "type":"Feature",
+          "id":54,
+          "geometry":{
+            "type":"Point",
+            "coordinates":[0.046657388234413413,5.7315854133107598]
+          },
+          "properties":{
+            "FID":54,
+            "TARGET_FID":1146,
+            "OBJECTID_1":1140,
+            "Northings":385586.78672799998,
+            "Eastings":1280192.4411299999,
+            "CreationDa":1752624000000,
+            "Creator":"sfiatuga",
+            "EditDate":1754092800000,
+            "Editor":"sfiatuga",
+            "HOUSE_NUMB":"SS14",
+            "ORIG_FID":55,
+            "Image_URL":"https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMNYAE53rdANIf0M0s82pbE9L8S6-c6s_fVQ&s"
+          }
+        }];
       });
 
-    // Load road GeoJSON and cache for performance
+    // Load road GeoJSON
     fetch('ROAD.json')
       .then(response => {
         if (!response.ok) throw new Error('Failed to load road GeoJSON');
@@ -485,39 +521,23 @@
       })
       .catch(error => {
         console.error('Error loading road data:', error);
-        const sampleRoadData = {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: { name: "Main Estate Road", type: "road", ROAD_ID: "R1" },
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0.0445, 5.7328],
-                  [0.0447, 5.7328],
-                  [0.0449, 5.7327]
-                ]
-              }
-            },
-            {
-              type: "Feature",
-              properties: { name: "Secondary Road", type: "road", ROAD_ID: "R2" },
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0.0446, 5.7329],
-                  [0.0448, 5.7329],
-                  [0.0450, 5.7330]
-                ]
-              }
+        roadData = [
+          {
+            type: "Feature",
+            properties: { name: "Main Estate Road", type: "road", ROAD_ID: "R1" },
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [0.0445, 5.7328],
+                [0.0447, 5.7328],
+                [0.0449, 5.7327]
+              ]
             }
-          ]
-        };
-        roadData = sampleRoadData.features;
+          }
+        ];
       });
 
-    // Initialize routing control with enhanced styling
+    // Initialize routing control
     routingControl = L.Routing.control({
       waypoints: [],
       routeWhileDragging: false,
@@ -545,7 +565,7 @@
       }
     }).addTo(map);
 
-    // Add loading indicator and error handling for routing
+    // Routing event handlers
     routingControl.on('routestart', function() {
       document.getElementById('loadingSpinner').style.display = 'block';
     });
@@ -553,24 +573,23 @@
     routingControl.on('routesfound', function(e) {
       document.getElementById('loadingSpinner').style.display = 'none';
       currentRoute = e.routes[0];
+      instructions = e.routes[0].instructions;
+      nextInstructionIndex = 0;
+      isNavigating = true;
+      
+      if (instructions.length > 0 && voiceEnabled) {
+        speakInstruction(instructions[0]);
+        nextInstructionIndex = 1;
+      }
+      
+      const distance = (e.routes[0].summary.totalDistance / 1000).toFixed(1);
+      if (voiceEnabled) speak(`Route calculated. Your destination is ${distance} kilometers away.`);
     });
 
     routingControl.on('routingerror', function(e) {
       document.getElementById('loadingSpinner').style.display = 'none';
-      speak("Unable to calculate route. Please try a different location or check your connection.");
-      alert("Routing error: Unable to find a route. Please try again or check road data.");
+      if (voiceEnabled) speak("Unable to calculate route. Please try a different location.");
     });
-
-    // Pre-warm routing engine
-    setTimeout(() => {
-      const dummyStart = [5.7328, 0.0447];
-      const dummyEnd = [5.7330, 0.0449];
-      routingControl.setWaypoints([
-        L.latLng(dummyStart[0], dummyStart[1]),
-        L.latLng(dummyEnd[0], dummyEnd[1])
-      ]);
-      setTimeout(() => routingControl.setWaypoints([]), 100);
-    }, 500);
 
     // High-precision geolocation
     const geoOptions = {
@@ -596,40 +615,6 @@
       handleLocationError,
       geoOptions
     );
-
-    routingControl.on('routesfound', function(e) {
-      const routes = e.routes;
-      instructions = routes[0].instructions;
-      nextInstructionIndex = 0;
-      isNavigating = true;
-      
-      // Clear any existing periodic updates
-      if (periodicUpdateInterval) {
-        clearInterval(periodicUpdateInterval);
-      }
-      
-      // Start periodic updates every 3 minutes
-      periodicUpdateInterval = setInterval(() => {
-        if (isNavigating) {
-          speakPeriodicUpdate();
-        }
-      }, 180000); // 3 minutes = 180000 milliseconds
-      
-      if (instructions.length > 0) {
-        speakInstruction(instructions[0]);
-        nextInstructionIndex = 1;
-      }
-      
-      const distance = (routes[0].summary.totalDistance / 1000).toFixed(1);
-      speak(`Route calculated. Your destination is ${distance} kilometers away.`);
-    });
-
-    routingControl.on('routeselected', function(e) {
-      const route = e.route;
-      instructions = route.instructions;
-      nextInstructionIndex = 0;
-      isNavigating = true;
-    });
 
     // Search input event listeners
     const searchInput = document.getElementById('searchInput');
@@ -661,11 +646,7 @@
         searchResults.appendChild(resultItem);
       });
       
-      if (houseMatches.length > 0) {
-        searchResults.style.display = 'block';
-      } else {
-        searchResults.style.display = 'none';
-      }
+      searchResults.style.display = houseMatches.length > 0 ? 'block' : 'none';
     });
     
     document.addEventListener('click', (e) => {
@@ -675,108 +656,10 @@
     });
   }
 
-  function speakPeriodicUpdate() {
-    if (!isNavigating || !instructions || instructions.length === 0) return;
-    
-    // Find the current instruction
-    let currentInstruction = null;
-    let nextInstruction = null;
-    
-    for (let i = 0; i < instructions.length; i++) {
-      const instruction = instructions[i];
-      const distanceToInstruction = map.distance(userPos, instruction.latLng);
-      
-      if (distanceToInstruction < 100) {
-        currentInstruction = instruction;
-        if (i < instructions.length - 1) {
-          nextInstruction = instructions[i + 1];
-        }
-        break;
-      }
-    }
-    
-    let updateMessage = "Periodic navigation update: ";
-    
-    if (currentInstruction) {
-      updateMessage += `You recently ${currentInstruction.text.toLowerCase()}. `;
-      
-      if (nextInstruction) {
-        const distance = nextInstruction.distance < 1000 ? 
-          `${Math.round(nextInstruction.distance)} meters` : 
-          `${(nextInstruction.distance / 1000).toFixed(1)} kilometers`;
-        updateMessage += `In ${distance}, ${nextInstruction.text}.`;
-      } else {
-        updateMessage += "You are approaching your destination.";
-      }
-    } else {
-      // If no current instruction found, give general update
-      const distanceToDestination = map.distance(userPos, instructions[instructions.length - 1].latLng);
-      const distanceText = distanceToDestination < 1000 ? 
-        `${Math.round(distanceToDestination)} meters` : 
-        `${(distanceToDestination / 1000).toFixed(1)} kilometers`;
-      
-      updateMessage += `You are ${distanceText} from your destination. `;
-      updateMessage += `Next instruction: ${instructions[0].text}`;
-    }
-    
-    speak(updateMessage);
-  }
-
-  function isInEstate(lat, lon) {
-    return lat >= estateBounds.minLat && lat <= estateBounds.maxLat &&
-           lon >= estateBounds.minLon && lon <= estateBounds.maxLon;
-  }
-
-  function findNearestRoadPoint(lat, lon) {
-    let minDistance = Infinity;
-    let nearestPoint = null;
-    let nearestRoadName = '';
-    const maxSnapDistance = 50; // Max snapping distance in meters
-
-    roadData.forEach(road => {
-      if (road.geometry.type === 'LineString') {
-        road.geometry.coordinates.forEach(coord => {
-          const distance = map.distance([lat, lon], [coord[1], coord[0]]);
-          if (distance < minDistance && distance <= maxSnapDistance) {
-            minDistance = distance;
-            nearestPoint = [coord[1], coord[0]]; // [lat, lon]
-            nearestRoadName = road.properties.name || road.properties.ROAD_ID || 'road';
-          }
-        });
-      }
-    });
-
-    return { point: nearestPoint, roadName: nearestRoadName, distance: minDistance };
-  }
-
-  function getRoadWaypoints(startLatLng, endLatLng) {
-    const waypoints = [];
-    
-    // Snap start point to road if in estate
-    if (isInEstate(startLatLng[0], startLatLng[1])) {
-      const nearestStart = findNearestRoadPoint(startLatLng[0], startLatLng[1]);
-      if (nearestStart.point && nearestStart.distance <= 50) {
-        waypoints.push(L.latLng(nearestStart.point[0], nearestStart.point[1]));
-        speak(`Starting from ${nearestStart.roadName}`);
-      } else {
-        waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-        speak("Starting from your current location, no nearby road found.");
-      }
-    } else {
-      waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-    }
-
-    // Route directly to destination (no snapping for destination)
-    waypoints.push(L.latLng(endLatLng[0], endLatLng[1]));
-
-    return waypoints;
-  }
-
   function updateUserPosition(position) {
     const lat = position.coords.latitude;
     const lon = position.coords.longitude;
-    // Limit accuracy circle to maximum 20 meters radius for visual clarity
-    const accuracy = Math.min(position.coords.accuracy, 20); 
+    const accuracy = Math.min(position.coords.accuracy, 20);
     
     userPos = [lat, lon];
     
@@ -814,19 +697,15 @@
     const distanceToNext = map.distance(userPos, currentInstruction.latLng);
 
     if (distanceToNext < 50) {
-      speakInstruction(currentInstruction);
+      if (voiceEnabled) speakInstruction(currentInstruction);
       nextInstructionIndex++;
       
-      if (nextInstructionIndex < instructions.length) {
+      if (nextInstructionIndex < instructions.length && distanceToNext < 150) {
         const nextInstruction = instructions[nextInstructionIndex];
-        const nextDistance = map.distance(userPos, nextInstruction.latLng);
-        
-        if (nextDistance < 150) {
-          speak(`After that, ${nextInstruction.text}`);
-        }
+        if (voiceEnabled) speak(`After that, ${nextInstruction.text}`);
       }
     } else if (nextInstructionIndex === instructions.length - 1 && distanceToNext < 20) {
-      speak("You have arrived at your destination");
+      if (voiceEnabled) speak("You have arrived at your destination");
       isNavigating = false;
       if (periodicUpdateInterval) {
         clearInterval(periodicUpdateInterval);
@@ -855,13 +734,12 @@
     }
     
     speak(text);
-    lastSpokenInstruction = text;
   }
 
   function repeatInstruction() {
     if (lastSpokenInstruction) {
       speak(lastSpokenInstruction);
-    } else {
+    } else if (voiceEnabled) {
       speak("No instructions available");
     }
   }
@@ -908,7 +786,7 @@
   function doSearch() {
     const q = document.getElementById('searchInput').value;
     if (!q || !userPos.length) {
-      speak("Please enter a search term and ensure location services are enabled.");
+      if (voiceEnabled) speak("Please enter a search term and ensure location services are enabled.");
       return;
     }
     
@@ -928,31 +806,28 @@
       .then(res => res.json())
       .then(data => {
         if (!data.length) {
-          speak("Location not found. Please try another search term.");
-          return alert('Location not found');
+          if (voiceEnabled) speak("Location not found. Please try another search term.");
+          return;
         }
         const dest = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
         
         if (isInEstate(dest[0], dest[1])) {
-          // If destination is in estate but not a house number, use road snapping
           const waypoints = getRoadWaypoints(userPos, dest);
           routingControl.setWaypoints(waypoints);
           map.setView(dest, 15);
-          speak(`Routing to ${q} via estate roads`);
+          if (voiceEnabled) speak(`Routing to ${q} via estate roads`);
         } else {
-          // External location - route directly
           routingControl.setWaypoints([
             L.latLng(userPos[0], userPos[1]), 
             L.latLng(dest[0], dest[1])
           ]);
           map.setView(dest, 15);
-          speak(`Routing to ${q}`);
+          if (voiceEnabled) speak(`Routing to ${q}`);
         }
       })
       .catch(err => {
         console.error('Search error:', err);
-        speak("Error searching for location. Please try again.");
-        alert('Error searching for location');
+        if (voiceEnabled) speak("Error searching for location. Please try again.");
       });
   }
 
@@ -974,7 +849,6 @@
       shadowSize: [41, 41]
     });
     
-    // Create popup content with image if available
     let popupContent = `<b>House:</b> ${house.properties.HOUSE_NUMB}`;
     if (house.properties.Image_URL) {
       popupContent += `<br><img src="${house.properties.Image_URL}" style="max-width:250px; max-height:250px; margin-top:10px;">`;
@@ -990,7 +864,6 @@
         map.removeControl(routingControl);
       }
 
-      // Route directly to the building point
       routingControl = L.Routing.control({
         waypoints: [
           L.latLng(userPos[0], userPos[1]),
@@ -1010,11 +883,58 @@
         createMarker: function() { return null; }
       }).addTo(map);
       
-      speak(`Routing to house ${house.properties.HOUSE_NUMB}`);
-    } else {
+      if (voiceEnabled) speak(`Routing to house ${house.properties.HOUSE_NUMB}`);
+    } else if (voiceEnabled) {
       speak("Please enable location services to get directions.");
-      alert("Please enable location services to get directions.");
     }
+  }
+
+  function isInEstate(lat, lon) {
+    return lat >= estateBounds.minLat && lat <= estateBounds.maxLat &&
+           lon >= estateBounds.minLon && lon <= estateBounds.maxLon;
+  }
+
+  function findNearestRoadPoint(lat, lon) {
+    let minDistance = Infinity;
+    let nearestPoint = null;
+    let nearestRoadName = '';
+    const maxSnapDistance = 50;
+
+    roadData.forEach(road => {
+      if (road.geometry.type === 'LineString') {
+        road.geometry.coordinates.forEach(coord => {
+          const distance = map.distance([lat, lon], [coord[1], coord[0]]);
+          if (distance < minDistance && distance <= maxSnapDistance) {
+            minDistance = distance;
+            nearestPoint = [coord[1], coord[0]];
+            nearestRoadName = road.properties.name || road.properties.ROAD_ID || 'road';
+          }
+        });
+      }
+    });
+
+    return { point: nearestPoint, roadName: nearestRoadName, distance: minDistance };
+  }
+
+  function getRoadWaypoints(startLatLng, endLatLng) {
+    const waypoints = [];
+    
+    if (isInEstate(startLatLng[0], startLatLng[1])) {
+      const nearestStart = findNearestRoadPoint(startLatLng[0], startLatLng[1]);
+      if (nearestStart.point && nearestStart.distance <= 50) {
+        waypoints.push(L.latLng(nearestStart.point[0], nearestStart.point[1]));
+        if (voiceEnabled) speak(`Starting from ${nearestStart.roadName}`);
+      } else {
+        waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
+        if (voiceEnabled) speak("Starting from your current location, no nearby road found.");
+      }
+    } else {
+      waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
+    }
+
+    waypoints.push(L.latLng(endLatLng[0], endLatLng[1]));
+
+    return waypoints;
   }
 
   window.addEventListener('beforeunload', () => {
