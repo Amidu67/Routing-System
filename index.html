@@ -304,7 +304,7 @@
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.2);
       font-size: 14px;
-      display: none;
+      display: none; /* Hidden until transport mode is clicked */
     }
 
     .distance-row {
@@ -428,23 +428,14 @@
         <span class="time-value" id="bikingTimeValue">-</span>
       </span>
     </div>
-    <div class="distance-row" id="drivingDistance">
-      <span><i class="fas fa-car"></i> Driving:</span>
-      <span>
-        <span class="time-value" id="drivingTimeValue">-</span>
-      </span>
-    </div>
   </div>
   
-  <div class="transport-controls">
+  <div class="transport-controls" id="transportControls">
     <button class="transport-btn active" id="walkingBtn" onclick="setTransportMode('walking')">
       <i class="fas fa-walking"></i> Walk
     </button>
     <button class="transport-btn" id="bikingBtn" onclick="setTransportMode('biking')">
       <i class="fas fa-bicycle"></i> Bike
-    </button>
-    <button class="transport-btn" id="drivingBtn" onclick="setTransportMode('driving')">
-      <i class="fas fa-car"></i> Drive
     </button>
   </div>
   
@@ -477,8 +468,7 @@
   let routeCalculating = false;
   let distanceCache = {
     walking: { distance: null, duration: null },
-    biking: { distance: null, duration: null },
-    driving: { distance: null, duration: null }
+    biking: { distance: null, duration: null }
   };
 
   const estateBounds = {
@@ -642,6 +632,25 @@
     }
   }
 
+  function resetTransportMode() {
+    currentTransportMode = 'walking';
+    document.querySelectorAll('.transport-btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    document.getElementById('walkingBtn').classList.add('active');
+    document.querySelectorAll('.distance-row').forEach(row => {
+      row.classList.remove('active');
+    });
+    document.getElementById('walkingDistance').classList.add('active');
+    document.getElementById('distanceInfo').style.display = 'none';
+    distanceCache = {
+      walking: { distance: null, duration: null },
+      biking: { distance: null, duration: null }
+    };
+    document.getElementById('walkingTimeValue').textContent = '-';
+    document.getElementById('bikingTimeValue').textContent = '-';
+  }
+
   function setTransportMode(mode) {
     if (currentTransportMode === mode) return;
     
@@ -659,8 +668,14 @@
     });
     document.getElementById(`${mode}Distance`).classList.add('active');
     
-    // Recalculate route if we have a destination
+    // Show distance info only after transport mode is selected
     if (currentDestination) {
+      document.getElementById('distanceInfo').style.display = 'block';
+      const cachedData = distanceCache[currentTransportMode];
+      if (cachedData.duration !== null) {
+        document.getElementById(`${currentTransportMode}TimeValue`).textContent = 
+          formatDuration(cachedData.duration);
+      }
       calculateRoute(currentDestination);
     }
     
@@ -688,16 +703,14 @@
   function calculateDuration(distance, mode) {
     // Approximate speeds in meters per second
     const speeds = {
-        walking: 1.4,  // ~5 km/h
-        biking: 4.2,   // ~15 km/h
-        driving: 13.9  // ~50 km/h
+        walking: 1.9,  // ~6.64 km/h
+        biking: 14.9   // ~54 km/h
     };
     return distance / speeds[mode];
   }
 
   function getProfileForMode(mode) {
     switch(mode) {
-      case 'driving': return 'driving';
       case 'biking': return 'cycling';
       case 'walking': 
       default: return 'foot';
@@ -739,8 +752,7 @@
   async function calculateAllRouteDistances(destination) {
     const modes = [
       { mode: 'walking', profile: 'foot' },
-      { mode: 'biking', profile: 'cycling' },
-      { mode: 'driving', profile: 'driving' }
+      { mode: 'biking', profile: 'cycling' }
     ];
 
     // Reset distances
@@ -749,7 +761,7 @@
       document.getElementById(`${m.mode}TimeValue`).textContent = '-';
     });
 
-    // Calculate distances for all modes in sequence (not parallel to avoid API rate limits)
+    // Calculate distances for all modes in sequence
     for (const { mode, profile } of modes) {
       try {
         const router = L.Routing.osrmv1({
@@ -790,7 +802,6 @@
         }
       } catch (err) {
         console.error(`Error calculating ${mode} route:`, err);
-        // Fallback to straight line distance if routing fails
         const straightDistance = map.distance(userPos, destination);
         const duration = calculateDuration(straightDistance, mode);
         distanceCache[mode] = {
@@ -801,11 +812,10 @@
           formatDuration(duration);
       }
       
-      // Small delay between requests to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    document.getElementById('distanceInfo').style.display = 'block';
+    // Distance info is only shown when a transport mode is selected
   }
 
   async function calculateRoute(destination) {
@@ -822,7 +832,7 @@
     }
 
     try {
-      // First calculate all distances
+      // Calculate all distances but don't show distance-info yet
       await calculateAllRouteDistances(destination);
       
       // Then proceed with the actual route calculation for the selected mode
@@ -884,32 +894,7 @@
 
       routingControl.on('routingerror', (e) => {
         console.error("Routing error:", e);
-        // Fallback to straight line if routing fails
-        const straightDistance = map.distance(userPos, destination);
-        const duration = calculateDuration(straightDistance, currentTransportMode);
-        distanceCache[currentTransportMode] = {
-          distance: straightDistance,
-          duration: duration
-        };
-        
-        document.getElementById(`${currentTransportMode}TimeValue`).textContent = 
-          formatDuration(duration);
-        
-        const straightLine = L.polyline([userPos, destination], {
-          color: '#ff0000',
-          weight: 3,
-          dashArray: '10, 10',
-          opacity: 0.7
-        }).addTo(map);
-        
-        setTimeout(() => map.removeLayer(straightLine), 5000);
-        
-        if (voiceEnabled) {
-          speak(`Estimated time: ${formatDuration(duration)}.`);
-        }
-        
-        document.getElementById('loadingSpinner').style.display = 'none';
-        routeCalculating = false;
+        handleRoutingError();
       });
 
     } catch (error) {
@@ -976,7 +961,6 @@
               "EditDate":1754092800000,
               "Editor":"sfiatuga",
               "HOUSE_NUMB":"SS14",
-              "ORIG_FID":55,
               "Image_URL":"https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMNYAE53rdANIf0M0s82pbE9L8S6-c6s_fVQ&s"
             }
           }];
@@ -1178,6 +1162,9 @@
         return;
       }
       
+      // Reset transport mode before performing new search
+      resetTransportMode();
+      
       const houseMatch = houseData.find(house => 
         house.properties.HOUSE_NUMB && 
         house.properties.HOUSE_NUMB.toUpperCase() === q.toUpperCase()
@@ -1212,6 +1199,9 @@
       if (highlightedHouse) {
         map.removeLayer(highlightedHouse);
       }
+      
+      // Reset transport mode before selecting new house
+      resetTransportMode();
       
       const houseCoords = house.geometry.coordinates;
       const houseLatLng = [houseCoords[1], houseCoords[0]];
