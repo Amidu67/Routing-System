@@ -9,6 +9,7 @@
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -254,6 +255,96 @@
       border: 1px solid #ddd;
     }
 
+    .transport-controls {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .transport-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 4px;
+      background: #f8f9fa;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .transport-btn:hover {
+      background: #e9ecef;
+    }
+
+    .transport-btn.active {
+      background: #007bff;
+      color: white;
+    }
+
+    .transport-btn i {
+      font-size: 18px;
+    }
+
+    .distance-info {
+      position: absolute;
+      top: 80px;
+      right: 20px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      font-size: 14px;
+      display: none;
+    }
+
+    .distance-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      min-width: 200px;
+    }
+
+    .distance-row span:first-child {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .distance-row span:last-child {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .distance-value {
+      font-weight: bold;
+      display: none; /* Hide distance value */
+    }
+
+    .time-value {
+      font-size: 0.9em;
+      color: #666;
+    }
+
+    .distance-row.active {
+      font-weight: bold;
+      color: #007bff;
+    }
+
+    .distance-row.active .time-value {
+      color: #007bff;
+    }
+
     @media (max-width: 768px) {
       .search-bar {
         width: 90%;
@@ -263,6 +354,15 @@
       }
       #home h1 {
         font-size: 2em;
+      }
+      .transport-controls {
+        bottom: 80px;
+        flex-direction: row;
+      }
+      .distance-info {
+        top: 120px;
+        right: 10px;
+        left: 10px;
       }
     }
   </style>
@@ -314,6 +414,40 @@
   </div>
   <div id="map"></div>
   <div id="loadingSpinner" class="loading-spinner" style="display: none;"></div>
+  
+  <div class="distance-info" id="distanceInfo">
+    <div class="distance-row" id="walkingDistance">
+      <span><i class="fas fa-walking"></i> Walking:</span>
+      <span>
+        <span class="time-value" id="walkingTimeValue">-</span>
+      </span>
+    </div>
+    <div class="distance-row" id="bikingDistance">
+      <span><i class="fas fa-bicycle"></i> Biking:</span>
+      <span>
+        <span class="time-value" id="bikingTimeValue">-</span>
+      </span>
+    </div>
+    <div class="distance-row" id="drivingDistance">
+      <span><i class="fas fa-car"></i> Driving:</span>
+      <span>
+        <span class="time-value" id="drivingTimeValue">-</span>
+      </span>
+    </div>
+  </div>
+  
+  <div class="transport-controls">
+    <button class="transport-btn active" id="walkingBtn" onclick="setTransportMode('walking')">
+      <i class="fas fa-walking"></i> Walk
+    </button>
+    <button class="transport-btn" id="bikingBtn" onclick="setTransportMode('biking')">
+      <i class="fas fa-bicycle"></i> Bike
+    </button>
+    <button class="transport-btn" id="drivingBtn" onclick="setTransportMode('driving')">
+      <i class="fas fa-car"></i> Drive
+    </button>
+  </div>
+  
   <div class="voice-controls">
     <button class="voice-btn" onclick="toggleVoice()" title="Toggle voice guidance" id="voiceToggleBtn">🔊</button>
   </div>
@@ -322,6 +456,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
 
 <script>
   let map, routingControl, userMarker, accuracyCircle, userPos = [], instructions = [];
@@ -337,6 +472,14 @@
   let voiceEnabled = true;
   let audioContextInitialized = false;
   let lastPosition = null;
+  let currentTransportMode = 'walking';
+  let currentDestination = null;
+  let routeCalculating = false;
+  let distanceCache = {
+    walking: { distance: null, duration: null },
+    biking: { distance: null, duration: null },
+    driving: { distance: null, duration: null }
+  };
 
   const estateBounds = {
     minLat: 5.7260,
@@ -385,14 +528,12 @@
           utter.volume = 1.0;
         }
         const voices = window.speechSynthesis.getVoices();
-        console.log("Available voices:", voices.map(v => ({ name: v.name, lang: v.lang })));
         let selectedVoice = voices.find(v => v.name.includes('Siri') || v.name.includes('Female') || v.name.includes('woman'));
         if (!selectedVoice) {
           selectedVoice = voices.find(v => v.lang === 'en-US') || voices[0];
         }
         if (selectedVoice) {
           utter.voice = selectedVoice;
-          console.log("Selected voice:", selectedVoice.name);
         }
         utter.onerror = function(event) {
           console.error("SpeechSynthesis error:", event);
@@ -501,6 +642,282 @@
     }
   }
 
+  function setTransportMode(mode) {
+    if (currentTransportMode === mode) return;
+    
+    currentTransportMode = mode;
+    
+    // Update button styles
+    document.querySelectorAll('.transport-btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    document.getElementById(`${mode}Btn`).classList.add('active');
+    
+    // Update distance display
+    document.querySelectorAll('.distance-row').forEach(row => {
+      row.classList.remove('active');
+    });
+    document.getElementById(`${mode}Distance`).classList.add('active');
+    
+    // Recalculate route if we have a destination
+    if (currentDestination) {
+      calculateRoute(currentDestination);
+    }
+    
+    if (voiceEnabled) {
+      speak(`Transport mode set to ${mode}`);
+    }
+  }
+
+  function formatDistance(distance) {
+    // Return empty string to hide distance display
+    return "";
+  }
+
+  function formatDuration(seconds) {
+    if (seconds === null) return "-";
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.round((seconds % 3600) / 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes} min`;
+  }
+
+  function calculateDuration(distance, mode) {
+    // Approximate speeds in meters per second
+    const speeds = {
+        walking: 1.4,  // ~5 km/h
+        biking: 4.2,   // ~15 km/h
+        driving: 13.9  // ~50 km/h
+    };
+    return distance / speeds[mode];
+  }
+
+  function getProfileForMode(mode) {
+    switch(mode) {
+      case 'driving': return 'driving';
+      case 'biking': return 'cycling';
+      case 'walking': 
+      default: return 'foot';
+    }
+  }
+
+  function handleRoutingError() {
+    document.getElementById('loadingSpinner').style.display = 'none';
+    if (voiceEnabled) speak("Unable to calculate route. Please try a different location.");
+    if (periodicUpdateInterval) {
+      clearInterval(periodicUpdateInterval);
+      periodicUpdateInterval = null;
+    }
+    routeCalculating = false;
+    
+    // Fallback to straight line if routing fails
+    if (currentDestination) {
+      const straightDistance = map.distance(userPos, currentDestination);
+      const duration = calculateDuration(straightDistance, currentTransportMode);
+      distanceCache[currentTransportMode] = {
+        distance: straightDistance,
+        duration: duration
+      };
+      
+      document.getElementById(`${currentTransportMode}TimeValue`).textContent = 
+        formatDuration(duration);
+      
+      const straightLine = L.polyline([userPos, currentDestination], {
+        color: '#ff0000',
+        weight: 3,
+        dashArray: '10, 10',
+        opacity: 0.7
+      }).addTo(map);
+      
+      setTimeout(() => map.removeLayer(straightLine), 5000);
+    }
+  }
+
+  async function calculateAllRouteDistances(destination) {
+    const modes = [
+      { mode: 'walking', profile: 'foot' },
+      { mode: 'biking', profile: 'cycling' },
+      { mode: 'driving', profile: 'driving' }
+    ];
+
+    // Reset distances
+    modes.forEach(m => {
+      distanceCache[m.mode] = { distance: null, duration: null };
+      document.getElementById(`${m.mode}TimeValue`).textContent = '-';
+    });
+
+    // Calculate distances for all modes in sequence (not parallel to avoid API rate limits)
+    for (const { mode, profile } of modes) {
+      try {
+        const router = L.Routing.osrmv1({
+          serviceUrl: 'https://router.project-osrm.org/route/v1',
+          profile: profile,
+          timeout: 10000
+        });
+
+        const routes = await new Promise((resolve, reject) => {
+          router.route([
+            L.latLng(userPos[0], userPos[1]),
+            L.latLng(destination[0], destination[1])
+          ], (err, routes) => {
+            if (err) {
+              console.log(`No ${mode} route found, using straight line distance`);
+              const straightDistance = map.distance(userPos, destination);
+              const duration = calculateDuration(straightDistance, mode);
+              distanceCache[mode] = {
+                distance: straightDistance,
+                duration: duration
+              };
+              document.getElementById(`${mode}TimeValue`).textContent = 
+                formatDuration(duration);
+              resolve([]);
+            } else {
+              resolve(routes);
+            }
+          });
+        });
+
+        if (routes && routes[0]) {
+          distanceCache[mode] = {
+            distance: routes[0].summary.totalDistance,
+            duration: routes[0].summary.totalTime
+          };
+          document.getElementById(`${mode}TimeValue`).textContent = 
+            formatDuration(routes[0].summary.totalTime);
+        }
+      } catch (err) {
+        console.error(`Error calculating ${mode} route:`, err);
+        // Fallback to straight line distance if routing fails
+        const straightDistance = map.distance(userPos, destination);
+        const duration = calculateDuration(straightDistance, mode);
+        distanceCache[mode] = {
+          distance: straightDistance,
+          duration: duration
+        };
+        document.getElementById(`${mode}TimeValue`).textContent = 
+          formatDuration(duration);
+      }
+      
+      // Small delay between requests to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    document.getElementById('distanceInfo').style.display = 'block';
+  }
+
+  async function calculateRoute(destination) {
+    if (routeCalculating) return;
+    routeCalculating = true;
+    currentDestination = destination;
+    document.getElementById('loadingSpinner').style.display = 'block';
+    
+    if (!userPos.length) {
+      if (voiceEnabled) speak("Please enable location services to get directions.");
+      document.getElementById('loadingSpinner').style.display = 'none';
+      routeCalculating = false;
+      return;
+    }
+
+    try {
+      // First calculate all distances
+      await calculateAllRouteDistances(destination);
+      
+      // Then proceed with the actual route calculation for the selected mode
+      if (routingControl) {
+        map.removeControl(routingControl);
+      }
+
+      const profile = getProfileForMode(currentTransportMode);
+
+      routingControl = L.Routing.control({
+        waypoints: [
+          L.latLng(userPos[0], userPos[1]),
+          L.latLng(destination[0], destination[1])
+        ],
+        routeWhileDragging: false,
+        showAlternatives: false,
+        addWaypoints: false,
+        draggableWaypoints: false,
+        fitSelectedRoutes: true,
+        lineOptions: {
+          styles: [
+            { color: '#0066ff', weight: 5, opacity: 0.8 },
+            { color: '#66ccff', weight: 4, opacity: 0.5 }
+          ]
+        },
+        createMarker: () => null,
+        router: L.Routing.osrmv1({
+          serviceUrl: 'https://router.project-osrm.org/route/v1',
+          profile: profile,
+          timeout: 15000
+        })
+      }).addTo(map);
+
+      routingControl.on('routestart', () => {
+        document.getElementById('loadingSpinner').style.display = 'block';
+      });
+
+      routingControl.on('routesfound', (e) => {
+        try {
+          document.getElementById('loadingSpinner').style.display = 'none';
+          currentRoute = e.routes[0];
+          instructions = e.routes[0].instructions;
+          nextInstructionIndex = 0;
+          isNavigating = true;
+          
+          const cachedData = distanceCache[currentTransportMode];
+          
+          if (voiceEnabled) {
+            speak(`Route calculated. Estimated time: ${formatDuration(cachedData.duration)}.`);
+          }
+          
+          startPeriodicVoiceUpdates();
+        } catch (e) {
+          console.error("Error in routesfound:", e);
+        } finally {
+          routeCalculating = false;
+        }
+      });
+
+      routingControl.on('routingerror', (e) => {
+        console.error("Routing error:", e);
+        // Fallback to straight line if routing fails
+        const straightDistance = map.distance(userPos, destination);
+        const duration = calculateDuration(straightDistance, currentTransportMode);
+        distanceCache[currentTransportMode] = {
+          distance: straightDistance,
+          duration: duration
+        };
+        
+        document.getElementById(`${currentTransportMode}TimeValue`).textContent = 
+          formatDuration(duration);
+        
+        const straightLine = L.polyline([userPos, destination], {
+          color: '#ff0000',
+          weight: 3,
+          dashArray: '10, 10',
+          opacity: 0.7
+        }).addTo(map);
+        
+        setTimeout(() => map.removeLayer(straightLine), 5000);
+        
+        if (voiceEnabled) {
+          speak(`Estimated time: ${formatDuration(duration)}.`);
+        }
+        
+        document.getElementById('loadingSpinner').style.display = 'none';
+        routeCalculating = false;
+      });
+
+    } catch (error) {
+      console.error("Error in calculateRoute:", error);
+      handleRoutingError();
+    }
+  }
+
   function initMap() {
     console.log("Initializing map");
     if (map) return;
@@ -564,89 +981,6 @@
             }
           }];
         });
-
-      fetch('ROAD.json')
-        .then(response => {
-          if (!response.ok) throw new Error('Failed to load road GeoJSON');
-          return response.json();
-        })
-        .then(data => {
-          roadData = data.features;
-        })
-        .catch(error => {
-          console.error('Error loading road data:', error);
-          roadData = [
-            {
-              type: "Feature",
-              properties: { name: "Main Estate Road", type: "road", ROAD_ID: "R1" },
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0.0445, 5.7328],
-                  [0.0447, 5.7328],
-                  [0.0449, 5.7327]
-                ]
-              }
-            }
-          ];
-        });
-
-      routingControl = L.Routing.control({
-        waypoints: [],
-        routeWhileDragging: false,
-        collapsible: true,
-        show: false,
-        createMarker: () => null,
-        formatter: new L.Routing.Formatter({
-          language: 'en',
-          units: 'metric'
-        }),
-        router: L.Routing.osrmv1({
-          serviceUrl: 'https://router.project-osrm.org/route/v1',
-          timeout: 5000,
-          profile: 'driving'
-        }),
-        plan: L.Routing.plan([], {
-          draggableWaypoints: false,
-          addWaypoints: false
-        }),
-        lineOptions: {
-          styles: [
-            { className: 'route-line', weight: 5, opacity: 0.8 },
-            { className: 'route-line-upcoming', weight: 4, opacity: 0.5 }
-          ]
-        }
-      }).addTo(map);
-
-      routingControl.on('routestart', function() {
-        document.getElementById('loadingSpinner').style.display = 'block';
-      });
-
-      routingControl.on('routesfound', function(e) {
-        try {
-          document.getElementById('loadingSpinner').style.display = 'none';
-          currentRoute = e.routes[0];
-          instructions = e.routes[0].instructions;
-          nextInstructionIndex = 0;
-          isNavigating = true;
-          
-          const distance = (e.routes[0].summary.totalDistance / 1000).toFixed(1);
-          if (voiceEnabled) speak(`Route calculated. Your destination is ${distance} kilometers away.`);
-          
-          startPeriodicVoiceUpdates();
-        } catch (e) {
-          console.error("Error in routesfound:", e);
-        }
-      });
-
-      routingControl.on('routingerror', function(e) {
-        document.getElementById('loadingSpinner').style.display = 'none';
-        if (voiceEnabled) speak("Unable to calculate route. Please try a different location.");
-        if (periodicUpdateInterval) {
-          clearInterval(periodicUpdateInterval);
-          periodicUpdateInterval = null;
-        }
-      });
 
       const geoOptions = {
         enableHighAccuracy: true,
@@ -862,20 +1196,7 @@
             return;
           }
           const dest = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
-          
-          if (isInEstate(dest[0], dest[1])) {
-            const waypoints = getRoadWaypoints(userPos, dest);
-            routingControl.setWaypoints(waypoints);
-            map.setView(dest, 15);
-            if (voiceEnabled) speak(`Routing to ${q} via estate roads`);
-          } else {
-            routingControl.setWaypoints([
-              L.latLng(userPos[0], userPos[1]), 
-              L.latLng(dest[0], dest[1])
-            ]);
-            map.setView(dest, 15);
-            if (voiceEnabled) speak(`Routing to ${q}`);
-          }
+          calculateRoute(dest);
         })
         .catch(err => {
           console.error('Search error:', err);
@@ -915,34 +1236,7 @@
         .bindPopup(popupContent)
         .openPopup();
 
-      if (userPos.length) {
-        if (routingControl) {
-          map.removeControl(routingControl);
-        }
-
-        routingControl = L.Routing.control({
-          waypoints: [
-            L.latLng(userPos[0], userPos[1]),
-            L.latLng(houseLatLng[0], houseLatLng[1])
-          ],
-          routeWhileDragging: false,
-          showAlternatives: false,
-          addWaypoints: false,
-          draggableWaypoints: false,
-          fitSelectedRoutes: true,
-          lineOptions: {
-            styles: [
-              { className: 'route-line', weight: 5, opacity: 0.8 },
-              { className: 'route-line-upcoming', weight: 4, opacity: 0.5 }
-            ]
-          },
-          createMarker: function() { return null; }
-        }).addTo(map);
-        
-        if (voiceEnabled) speak(`Routing to house ${house.properties.HOUSE_NUMB}`);
-      } else if (voiceEnabled) {
-        speak("Please enable location services to get directions.");
-      }
+      calculateRoute(houseLatLng);
     } catch (e) {
       console.error("Error in selectHouse:", e);
     }
@@ -955,59 +1249,6 @@
     } catch (e) {
       console.error("Error in isInEstate:", e);
       return false;
-    }
-  }
-
-  function findNearestRoadPoint(lat, lon) {
-    try {
-      let minDistance = Infinity;
-      let nearestPoint = null;
-      let nearestRoadName = '';
-      const maxSnapDistance = 50;
-
-      roadData.forEach(road => {
-        if (road.geometry.type === 'LineString') {
-          road.geometry.coordinates.forEach(coord => {
-            const distance = map.distance([lat, lon], [coord[1], coord[0]]);
-            if (distance < minDistance && distance <= maxSnapDistance) {
-              minDistance = distance;
-              nearestPoint = [coord[1], coord[0]];
-              nearestRoadName = road.properties.name || road.properties.ROAD_ID || 'road';
-            }
-          });
-        }
-      });
-
-      return { point: nearestPoint, roadName: nearestRoadName, distance: minDistance };
-    } catch (e) {
-      console.error("Error in findNearestRoadPoint:", e);
-      return { point: null, roadName: '', distance: Infinity };
-    }
-  }
-
-  function getRoadWaypoints(startLatLng, endLatLng) {
-    try {
-      const waypoints = [];
-      
-      if (isInEstate(startLatLng[0], startLatLng[1])) {
-        const nearestStart = findNearestRoadPoint(startLatLng[0], startLatLng[1]);
-        if (nearestStart.point && nearestStart.distance <= 50) {
-          waypoints.push(L.latLng(nearestStart.point[0], nearestStart.point[1]));
-          if (voiceEnabled) speak(`Starting from ${nearestStart.roadName}`);
-        } else {
-          waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-          if (voiceEnabled) speak("Starting from your current location, no nearby road found.");
-        }
-      } else {
-        waypoints.push(L.latLng(startLatLng[0], startLatLng[1]));
-      }
-
-      waypoints.push(L.latLng(endLatLng[0], endLatLng[1]));
-
-      return waypoints;
-    } catch (e) {
-      console.error("Error in getRoadWaypoints:", e);
-      return [L.latLng(startLatLng[0], startLatLng[1]), L.latLng(endLatLng[0], endLatLng[1])];
     }
   }
 
